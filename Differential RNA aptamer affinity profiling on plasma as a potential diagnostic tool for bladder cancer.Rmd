@@ -1,0 +1,551 @@
+---
+title: "Differential RNA aptamer affinity profiling on plasma as a potential diagnostic tool for bladder cancer - Source Code"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,warning = FALSE)
+```
+
+```{r, Libraries}
+library(pander)
+library(SummarizedExperiment)
+library(RColorBrewer)
+library(pls)
+library(pheatmap)
+library(caret)
+#' Load utility functions for the analysis
+source("util-functions.R")
+```
+```{r, initial_Values}
+lstApt <- 1000
+```
+
+
+
+```{r Dataloading1, include=FALSE}
+#Set1 is loaded
+SampleName <- "Set1"
+
+
+InputPath <- paste0("./Input/", SampleName)
+dtaPath <- paste0(InputPath, ".txt")
+
+dta <- read.table(dtaPath, sep = "\t", header = TRUE,
+                  comment.char = "", as.is = TRUE, check.names = FALSE)
+dta_sampPath <- paste0(InputPath,"_SampleNames", ".txt")
+
+dta_samp <- read.table(dta_sampPath, sep = "\t", header = TRUE,
+                  comment.char = "", as.is = TRUE, check.names = FALSE)
+
+smpl <- data.frame(sample_name = colnames(dta_samp[,-1]), 
+                   group = factor(dta_samp[1, -1]),
+                   Date = apply(dta_samp[2, -1], 1, as.Date, "%d-%m-%Y"),
+                   Total = t(dta[1, grep("^KK", colnames(dta))]),
+                   stringsAsFactors = FALSE)
+
+smpl$Date <- as.Date(smpl$X2,origin = "1970-01-01")
+smpl$Age <- smpl$X3
+smpl$Total <- smpl$X1
+
+dta_mat <- as.matrix(dta[-1, grep("^KK", colnames(dta))])
+dta_total <- as.matrix(dta[1, grep("^KK", colnames(dta))])
+dta_ann <- dta[-1, -grep("^KK", colnames(dta))]
+rownames(dta_mat) <- dta_ann[, 1]
+rownames(dta_ann) <- rownames(dta_mat)
+
+#' Load utility functions for the analysis
+
+sexp <- SummarizedExperiment(assays = list(count = dta_mat), rowData = dta_ann,
+                             colData = smpl[colnames(dta_mat), ])
+```
+
+
+```{r Dataloading, include=FALSE}
+#set 2 is loaded
+SampleName <- "Set2"
+
+
+InputPath <- paste0("./Input/", SampleName)
+dtaPath <- paste0(InputPath, ".txt")
+
+dta <- read.table(dtaPath, sep = "\t", header = TRUE,
+                  comment.char = "", as.is = TRUE, check.names = FALSE)
+dta_sampPath <- paste0(InputPath,"_SampleNames", ".txt")
+
+dta_samp <- read.table(dta_sampPath, sep = "\t", header = TRUE,
+                  comment.char = "", as.is = TRUE, check.names = FALSE)
+
+smpl <- data.frame(sample_name = colnames(dta_samp[,]), 
+                   group = factor(dta_samp[2, ]),
+                   Total = t(dta[1, grep("Total", colnames(dta))]),
+                   stringsAsFactors = FALSE)
+smpl$Source <- smpl$X1
+smpl$Total <- smpl$X2
+
+
+dta_mat <- as.matrix(dta[, grep("2|4", colnames(dta))])
+for(i in c(1:ncol(dta_mat))) {
+    dta_mat[,i] <- as.numeric(dta_mat[,i])
+}
+dta_total <- as.matrix(dta[1, grep("2|4", colnames(dta))])
+dta_anna <- dta[, -grep("2|4", colnames(dta))]
+rownames(dta_mat) <- dta_anna[, 1]
+rownames(dta_anna) <- rownames(dta_mat)
+
+sexpA <- SummarizedExperiment(assays = list(count = dta_mat), 
+                              rowData = dta_anna,
+                             colData = smpl[colnames(dta_mat), ])
+
+
+```
+
+
+
+```{r Dataloading, include=FALSE}
+#set 3 is loaded
+SampleName <- "Set3"
+
+InputPath <- paste0("./Input/", SampleName)
+dtaPath <- paste0(InputPath, ".txt")
+
+dta <- read.table(dtaPath, sep = "\t", header = TRUE,
+                  comment.char = "", as.is = TRUE, check.names = FALSE)
+dta_sampPath <- paste0(InputPath,"_SampleNames", ".txt")
+
+dta_samp <- read.table(dta_sampPath, sep = "\t", header = TRUE,
+                  comment.char = "", as.is = TRUE, check.names = FALSE)
+
+smpl <- data.frame(sample_name = colnames(dta_samp[,]), 
+                   group = factor(dta_samp[1, ]),
+                   stringsAsFactors = FALSE)
+
+smpl$Source <- smpl$X1
+
+dta_mat <- as.matrix(dta[, grep("KK", colnames(dta))])
+
+dta_total <- as.matrix(dta[1, grep("KK", colnames(dta))])
+dta_ann1 <- dta[, -grep("KK", colnames(dta))]
+rownames(dta_mat) <- dta_ann1[, 1]
+rownames(dta_ann1) <- rownames(dta_mat)
+
+sexp1 <- SummarizedExperiment(assays = list(count = dta_mat), 
+                              rowData = dta_ann1,
+                             colData = smpl[colnames(dta_mat), ])
+
+
+```
+
+
+```{r Outerjoin}
+#The sequences for set 3 is loaded and the rowdata is placed in a dataframe
+merge1 <- DataFrame(rowData(sexp1)["Sequence"], assay(sexp1))
+colnames(merge1)[1] <- "Sequence"
+#The sequences for set 2 is loaded and the rowdata is placed in a dataframe
+mergeB<- DataFrame(rowData(sexp)["Sequence"], assay(sexp))
+colnames(mergeB)[1] <- "Sequence"
+mergeA <- DataFrame(rowData(sexpA)["Sequence"], assay(sexpA))
+colnames(mergeA)[1] <- "Sequence"
+
+#A temporary dataframe is made by making an innerjoin on the sequences
+dtaTmp <- merge(mergeA, mergeB, by = "Sequence", all= FALSE ) 
+dtaTmp <- merge(merge1, dtaTmp, by = "Sequence", all= FALSE ) 
+filter <- grepl("KK|2|4",names(dtaTmp))
+grpTmp <- as.character(sexp1$group)
+#grpTmp <- sub("N0","No",as.character(sexpA$group))
+# The groups of the two datasets are likewise combined and refactored.
+# A new variable (Batch) records which set the sampels are from.
+Groups <- factor(c(grpTmp,as.character(sexp$group)))
+ColDta <- rbind(colData(sexp1)[c("group")],colData(sexpA)[c("group")],
+                colData(sexp)[c("group")])
+Batch <- c(rep("Set1",dim(sexp1)[2]),rep("Set3",dim(sexpA)[2]),
+           rep("Set2",dim(sexp)[2]))
+ColDta <- cbind(ColDta,Batch)
+```
+
+
+# Filtering
+
+
+
+
+```{r, BatchEffect}
+#Any batch effects are removed using a linear model.
+dta <- data.frame(dtaTmp[filter])
+#dta <- removeBatchEffect(dta,ColDta$Date)
+#dta <- removeBatchEffect(dta,Batch)
+Groups <- ColDta$group
+
+VariableWiseMean <- function(Data, Func = mean) {
+  (apply(Data,2,"/",apply(Data,1,Func)))
+}
+
+# The data is normalized to total input and across variables.
+tmpTst <- t(apply(dta,1,"/",apply(dta,2,sum)))
+Sequences <- dtaTmp$Sequence[order(tmpTst[,1],decreasing = TRUE)]
+tmpTst <- tmpTst[order(tmpTst[,1],decreasing = TRUE),]
+rownames(tmpTst) <- Sequences
+
+```
+
+
+
+
+```{r, warning=FALSE}
+
+#The normalized count data is recorded
+#is redefined into the container Data
+
+fitlmFunction <- function(x, dataMat, model = conc ~ source) {
+  dataMat$source <- dataMat
+  dataMat$conc <- x
+    mdl <- lm(model, data = dataMat)
+    smry <- data.frame(summary(mdl)$coefficients)
+    SourceTypes <- paste0("source", levels(dataMat$source)[-1])
+    
+    Output <- c(coef = smry[SourceTypes, 1], pvalue =  smry[SourceTypes, 4])
+    names(Output) <- c(paste0("coef.", SourceTypes),
+                       paste0("pvalue.", SourceTypes))
+    Output
+}
+
+# #' The data is cut into training and test datasets, based on the batches.
+   training2 <- tmpTst[1:lstApt,(Batch == "Set2")&(Groups != "N0")]
+   training2 <- VariableWiseMean(training2)
+   rownames(training2) <- as.character(seq(dim(training2)[1]))
+   trainSource <- factor(as.character(ColDta$group[(Batch == "Set2")&
+                                                     (Groups != "N0")]))
+   test2 <- tmpTst[1:lstApt,(Batch == "Set3")&(Groups != "N0")]
+   test2 <- VariableWiseMean(test2)
+   TestSource <- factor(as.character(ColDta$group[(Batch == "Set3")&
+                                                    (Groups != "N0")]))
+
+  #Set 2 is used as the training set, in the linear model
+fitMatrix <- t( apply(training2, 1, fitlmFunction, 
+                     dataMat = trainSource) )
+SourceTypes <- paste0("source", levels(trainSource)[-1])
+rownames(fitMatrix) <- Sequences[1:lstApt]
+
+#' Adjusting for multiple hypothesis testing
+p.adjusted <- p.adjust(fitMatrix[ ,paste0("pvalue.", SourceTypes)],
+                       method = "BH")
+#' The fitMatrix is appended to the rest of the data in training, making the
+#' new dataframe res_matrix_pos
+res_matrix_pos_TaT2<- cbind(tmpTst[1:lstApt,], fitMatrix, 
+                            adj.pvalue.sourceTa = p.adjusted)
+
+```
+
+```{r, Volcano TaT2}
+
+
+#' A new color set is defined to better conform to what is need by the volcano plot
+col_volcano <- brewer.pal(4, name = "Set1")
+col_volcano[1] <- "#DDDDDD" #' Grey
+col_volcano_Trans <- paste0(col_volcano, 80)
+
+#' The filters for pvalue and fold increase is defined
+pLimit <- 0.01
+foldLimit <- 0.25
+
+
+#' The filter for coloring the points is made
+colorFilterLowP <- as.matrix(
+    res_matrix_pos_TaT2[, paste0("adj.pvalue.", SourceTypes)]) < pLimit
+colorFilterHighFold <- abs(as.matrix(
+    res_matrix_pos_TaT2[, paste0("coef.", SourceTypes)])) > foldLimit
+
+
+colorFilter <- colorFilterLowP*0
+colorFilter[colorFilterHighFold * colorFilterLowP == 1] <- 1
+colorFilter <- colorFilter + 1
+
+#' The significant samples (both high fold difference and low p-value) are
+#' defined
+sign <- colorFilterLowP & colorFilterHighFold
+#' replace the "coef" in the column names with "significant"
+colnames(sign) <- "TaT4.Significant"
+res_matrix_pos_TaT2 <- cbind(res_matrix_pos_TaT2, sign)
+res_matrix_pos_TaT2 <- res_matrix_pos_TaT2[,grepl("T2-4",colnames(res_matrix_pos_TaT2))!=1]
+
+# The results are plotted in volcano plots.
+par(mfrow=c(1, 1), mar = c(4.3, 4.3, 1, 1))
+for (i in 1){
+    plot(res_matrix_pos_TaT2[, paste0("coef.", SourceTypes[i])],  cex = 1.6,
+         cex.axis = 1.5, cex.lab = 1.5,
+         -log10(res_matrix_pos_TaT2[, paste0("adj.pvalue.", SourceTypes[i])]),
+         pch = 16, main = sub(pattern = "source",replacement = "",
+                              paste0(SourceTypes[i], " vs T2-4")), 
+         col = col_volcano_Trans[colorFilter[, i]], 
+         ylab = expression(-log[10]~p[BH]-value), 
+         xlab = expression(~Regression~Coefficient~Change),
+         xlim =c(-0.5,0.5), ylim =c(0,5))
+    abline(h = -log10(pLimit))
+    abline(v = c(-foldLimit, foldLimit))
+    legend("topright", c("non-Significant", "Significant"),
+           col = col_volcano, pch = 16, bg = "white",cex = 1.2)
+}  
+  
+
+```
+```{r Filtereddta}
+
+# A PCA plot of the test data with the aptamers significantly 
+#different between N0 and T2-4
+pc <- prcomp(t(test2[which(res_matrix_pos_TaT2[,"TaT4.Significant"]==1),]),
+             scale = FALSE, center = TRUE)
+pcSummary <- summary(pc)
+PCvar <- (format(pcSummary$importance[2, ] * 100, digits = 3))
+dfTemp <- data.frame(pc$x[,1:4], as.character(TestSource))
+names(dfTemp)[5] <- "group"
+
+ggplot() +
+  geom_point(aes(x=PC1,y=PC2, fill = group, color = group), 
+             data = dfTemp, size = 4, alpha = 0.8) +
+  scale_x_continuous(name=paste0(names(PCvar)[1], " - ", PCvar[1], "%")) +
+  scale_y_continuous(name=paste0(names(PCvar)[2], " - ", PCvar[2], "%"))  +
+    theme(axis.title.x = element_text(size=16),
+           axis.text.x  = element_text(size=14), 
+           axis.title.y = element_text(size=16),
+           axis.text.y  = element_text(size=14)) +
+  theme(legend.title = element_text( size=16),
+  legend.text = element_text(size = 16)) +
+  scale_color_manual(values = RColorBrewer::brewer.pal(n = 3,name = "Dark2") ) +
+  scale_fill_manual(values = RColorBrewer::brewer.pal(n = 3,name = "Dark2") ) #+
+
+
+
+```
+
+
+
+```{r linear-fit-function, warning = FALSE}
+
+
+#The normalized count data is recorded
+#is redefined into the container Data
+
+# #' The data is cut into training and test datasets, based on the batches.
+   training2 <- tmpTst[1:lstApt,Batch == "Set2"]
+   training2 <- VariableWiseMean(training2)
+   rownames(training2) <- as.character(seq(dim(training2)[1]))
+   trainSource <- ColDta$group[Batch == "Set2"]
+   test2 <- tmpTst[1:lstApt,Batch == "Set3"]
+   test2 <- VariableWiseMean(test2)
+   TestSource <- ColDta$group[Batch == "Set3"]
+
+  #Set 2 is used as the training set, in the linear model
+fitMatrix <- t( apply(training2, 1, fitlmFunction, 
+                     dataMat = trainSource) )
+SourceTypes <- paste0("source", levels(trainSource)[-1])
+rownames(fitMatrix) <- Sequences[1:lstApt]
+
+#' Adjusting for multiple hypothesis testing
+p.adjusted <- apply(fitMatrix[ ,paste0("pvalue.", SourceTypes)], 2, p.adjust, 
+                    method = "BH")
+colnames(p.adjusted) <- paste0("adj.",colnames(p.adjusted))
+#' The fitMatrix is appended to the rest of the data in training, making the
+#' new dataframe res_matrix_pos
+res_matrix_pos<- cbind(tmpTst[1:lstApt,], fitMatrix, adj = p.adjusted)
+
+
+```
+
+
+```{r Volcanoplot}
+
+#' A new color set is defined to better conform to what is need by the volcano plot
+col_volcano <- brewer.pal(4, name = "Set1")
+col_volcano[1] <- "#DDDDDD" #' Grey
+col_volcano_Trans <- paste0(col_volcano, 80)
+
+pLimit <- 0.01
+foldLimit <- 0.5
+
+#' The filters for pvalue and fold increase is defined
+colorFilterLowP <- as.matrix(
+    res_matrix_pos[, paste0("adj.pvalue.", SourceTypes)]) < pLimit
+colorFilterHighFold <- abs(as.matrix(
+    res_matrix_pos[, paste0("coef.", SourceTypes)])) > foldLimit
+
+#' The filter for coloring the points is made
+colorFilter <- colorFilterLowP*0
+colorFilter[colorFilterHighFold * colorFilterLowP == 1] <- 1
+colorFilter <- colorFilter + 1
+
+#' The significant samples (both high fold difference and low p-value) are
+#' defined
+sign <- colorFilterLowP & colorFilterHighFold
+#' replace the "coef" in the column names with "significant"
+colnames(sign) <- sub("adj.pvalue", "significant", colnames(sign))
+res_matrix_pos <- cbind(res_matrix_pos, sign)
+
+
+for (i in 1:2){
+    plot(res_matrix_pos[, paste0("coef.", SourceTypes[i])],  cex = 1.6, 
+         cex.axis = 1.5, cex.lab = 1.5,
+         -log10(res_matrix_pos[, paste0("adj.pvalue.", SourceTypes[i])]),
+         pch = 16, main = sub(pattern = "source",replacement = "",
+                              paste0(SourceTypes[i], " vs N0")), 
+         col = col_volcano_Trans[colorFilter[, i]], 
+         ylab = expression(-log[10]~p[BH]-value), 
+         xlab = expression(~Regression~Coefficient~Change),
+         xlim =c(-1.5,1.5), ylim =c(0,5))
+    abline(h = -log10(pLimit))
+    abline(v = c(-foldLimit, foldLimit))
+    legend("topright", c("non-Significant", "Significant"),
+           col = col_volcano, pch = 16, bg = "white",cex = 1.2)
+}
+
+
+
+```
+
+
+```{r Filtereddta}
+
+  
+pc <- prcomp(t(test2[which(res_matrix_pos[,"significant.sourceT2-4"]|
+                             res_matrix_pos[,"significant.sourceTa"]),]),
+             scale = FALSE, center = TRUE)
+pcSummary <- summary(pc)
+PCvar <- (format(pcSummary$importance[2, ] * 100, digits = 3))
+dfTemp <- data.frame(pc$x[,1:4], as.character(TestSource))
+names(dfTemp)[5] <- "group"
+PCloadings <- data.frame(Variables = rownames(pc$rotation), pc$rotation)
+
+ggplot() +
+  geom_point(aes(x=PC1,y=PC2, fill = group, color = group), 
+             data = dfTemp, size = 4, alpha = 0.8) +
+  scale_x_continuous(name=paste0(names(PCvar)[1], " - ", PCvar[1], "%")) +
+  scale_y_continuous(name=paste0(names(PCvar)[2], " - ", PCvar[2], "%"))  +
+    theme(axis.title.x = element_text(size=16),
+           axis.text.x  = element_text(size=14), 
+           axis.title.y = element_text(size=16),
+           axis.text.y  = element_text(size=14)) +
+  theme(legend.title = element_text( size=16),
+  legend.text = element_text(size = 16)) +
+  scale_color_manual(values = RColorBrewer::brewer.pal(n = 3,name = "Dark2") ) +
+  scale_fill_manual(values = RColorBrewer::brewer.pal(n = 3,name = "Dark2") )# +
+
+
+```
+
+
+```{r, combined PCA}
+
+# A PCA plot of the test data with the aptamers significantly 
+#different between N0 and T2-4
+filter <- which.Sign <- which(res_matrix_pos[,"significant.sourceT2-4"]
+                            |res_matrix_pos[,"significant.sourceTa"]
+                            |res_matrix_pos_TaT2[,"TaT4.Significant"]==1)
+SignificantDta <- test2[filter,]
+
+pc <- prcomp(t(test2[filter,]), scale = FALSE, center = TRUE)
+pcSummary <- summary(pc)
+PCvar <- (format(pcSummary$importance[2, ] * 100, digits = 3))
+dfTemp <- data.frame(pc$x[,1:4], as.character(TestSource))
+names(dfTemp)[5] <- "group"
+
+ggplot() +
+  geom_point(aes(x=PC1,y=PC2, fill = group, color = group), 
+             data = dfTemp, size = 4, alpha = 0.8) +
+  scale_x_continuous(name=paste0(names(PCvar)[1], " - ", PCvar[1], "%")) +
+  scale_y_continuous(name=paste0(names(PCvar)[2], " - ", PCvar[2], "%"))  +
+    theme(axis.title.x = element_text(size=16),
+           axis.text.x  = element_text(size=14), 
+           axis.title.y = element_text(size=16),
+           axis.text.y  = element_text(size=14)) +
+  theme(legend.title = element_text( size=16),
+  legend.text = element_text(size = 16)) +
+  scale_color_manual(values = RColorBrewer::brewer.pal(n = 3,name = "Dark2") ) +
+  scale_fill_manual(values = RColorBrewer::brewer.pal(n = 3,name = "Dark2") )# +
+
+
+
+
+
+```
+
+```{r, heatmap}
+
+
+.heatMapFunc <- function(Data, Group,Group2=Group, Title="Heat Map", 
+                         breaksList = seq(0.75, 1.5, by = 0.05),
+                         lstApt = 1000, fontSize = 14,cluster_rows=FALSE,
+                         ColorSet="Set2") {
+  
+  groupMrg <- factor(Group)
+  groupMrg2 <- factor(Group2)
+  Levels <- levels(groupMrg)
+  dtaOrd <- data.frame(Data[1:lstApt,order(groupMrg)])
+  
+  groupMrg2 <- groupMrg2[order(groupMrg)]
+  groupMrg <- groupMrg[order(groupMrg)]
+  
+  
+  mat_col <- data.frame(group = Levels[groupMrg],group2 =groupMrg2)
+  rownames(mat_col) <- colnames(dtaOrd)
+  
+  if(all(as.numeric(groupMrg)==as.numeric(groupMrg2))){
+    mat_col <- data.frame(group = Levels[groupMrg])
+    rownames(mat_col) <- colnames(dtaOrd)
+  }
+  
+  # List with colors for each annotation.
+  levelsn <- length(Levels)
+  if (ColorSet=="Set2"&&levelsn>8){
+    ColorSet <- "Paired"
+  }
+  mat_colors <- list(group = brewer.pal(levelsn, ColorSet)[1:levelsn])
+  names(mat_colors$group) <- levels(groupMrg)
+  
+  pheatmap(
+    #cellwidth=0.25, cellheight=0.25,
+    mat               = dtaOrd,
+    color             = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList)),
+    border_color      = NA,
+    show_colnames     = FALSE,
+    show_rownames     = TRUE,
+    annotation_col    = mat_col,
+    annotation_colors = mat_colors,
+    cluster_rows      = cluster_rows,
+    cluster_col       = TRUE,
+    drop_levels       = TRUE,
+    breaks            = breaksList,
+    main              = Title,
+    fontsize          = fontSize,
+    treeheight_row    = 0,
+    treeheight_col    = 0
+  )
+  
+}
+
+which.Sign <- which(res_matrix_pos[,"significant.sourceT2-4"]|
+                      res_matrix_pos[,"significant.sourceTa"]|
+                      res_matrix_pos_TaT2[,"TaT4.Significant"]==1)
+
+SignificantDta <- test2[which.Sign,]
+SignificantDta <- SignificantDta[order(rownames(SignificantDta)),]
+rownames(SignificantDta) <- c("M1","D2","A1","A3","A2","L1","I2","H2","H1",
+                            "J1","G4","E2","B4","B3","B1","C1","P1","C2",
+                            "R1","E1","K1","G3","E3","N1","G2","I1","F1",
+                            "G1","F2","B2","O1","Q1","D1")
+
+
+TestSource2 <- factor(as.character(TestSource),levels= c("N0","T2-4","Ta"))
+
+
+SignificantDta <- SignificantDta[order(rownames(SignificantDta)),]
+.heatMapFunc(Data=SignificantDta,Group = TestSource2,lstApt = nrow(SignificantDta)
+             ,cluster_rows = FALSE,ColorSet="Set2",fontSize = 10)
+
+
+
+
+```
+
+
